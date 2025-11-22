@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAdminSession } from "../../hooks/useAdminSession";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface EditHistoryItem {
   id: number;
@@ -39,9 +40,11 @@ export default function EditHistoryPage() {
   const fetchHistory = async () => {
     try {
       const url = filter === "all"
-        ? "/api/admin/edit-history"
-        : `/api/admin/edit-history?page=${filter}`;
-      const response = await fetch(url);
+        ? API_ENDPOINTS.EDIT_HISTORY
+        : `${API_ENDPOINTS.EDIT_HISTORY}?page=${filter}`;
+      const response = await fetch(url, {
+        credentials: "include",
+      });
       const data = await response.json();
       setHistory(data);
       if (data && data.length > 0) {

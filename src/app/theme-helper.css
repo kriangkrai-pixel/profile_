@@ -8,7 +8,9 @@
   --bg-color: #ffffff;
   --text-color: #1f2937;
   --header-bg: #ffffff;
+  --header-text: #1f2937;
   --footer-bg: #1f2937;
+  --footer-text: #ffffff;
 }
 
 /* Utility Classes for Dynamic Colors */

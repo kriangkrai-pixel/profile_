@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useProfile } from "./context/ProfileContext";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface WidgetStyle {
   backgroundColor?: string;
@@ -44,7 +45,9 @@ interface ThemeSettings {
   backgroundColor: string;
   textColor: string;
   headerBgColor: string;
+  headerTextColor: string;
   footerBgColor: string;
+  footerTextColor: string;
 }
 
 export default function Home() {
@@ -54,8 +57,8 @@ export default function Home() {
   
   // State สำหรับ Theme Settings
   const [theme, setTheme] = useState<ThemeSettings>({
-    primaryColor: "#3b82f6",
-    secondaryColor: "#8b5cf6",
+    primaryColor: "#000000ff",
+    secondaryColor: "#000000ff",
     accentColor: "#10b981",
     backgroundColor: "#ffffff",
     textColor: "#1f2937",
@@ -78,8 +81,9 @@ export default function Home() {
   useEffect(() => {
     const loadLayout = async () => {
       try {
-        const response = await fetch("/api/layout", {
-          next: { revalidate: 60 }, // Cache 60 วินาที
+        const response = await fetch(API_ENDPOINTS.LAYOUT, {
+          credentials: "include",
+          cache: "no-store",
         });
         const data = await response.json();
         
@@ -98,13 +102,14 @@ export default function Home() {
 
     const loadTheme = async () => {
       try {
-        const response = await fetch("/api/settings", {
-          next: { revalidate: 60 }, // Cache 60 วินาที
+        const response = await fetch(API_ENDPOINTS.SETTINGS, {
+          credentials: "include",
+          cache: "no-store",
         });
         const data = await response.json();
         if (data && !data.error) {
           setTheme({
-            primaryColor: data.primaryColor || "#3b82f6",
+            primaryColor: data.primaryColor || "#000000ff",
             secondaryColor: data.secondaryColor || "#8b5cf6",
             accentColor: data.accentColor || "#10b981",
             backgroundColor: data.backgroundColor || "#ffffff",
@@ -137,9 +142,22 @@ export default function Home() {
       document.documentElement.style.setProperty('--bg-color', theme.backgroundColor);
       document.documentElement.style.setProperty('--text-color', theme.textColor);
       document.documentElement.style.setProperty('--header-bg', theme.headerBgColor);
+      document.documentElement.style.setProperty('--header-text', theme.headerTextColor || theme.textColor);
       document.documentElement.style.setProperty('--footer-bg', theme.footerBgColor);
+      document.documentElement.style.setProperty('--footer-text', theme.footerTextColor || '#ffffff');
     }
   }, [theme]);
+
+  // Listen for profile updates และ refresh ข้อมูลทันที
+  useEffect(() => {
+    const handleProfileUpdate = async () => {
+      console.log("🔄 Profile updated event received, refreshing...");
+      await refreshProfile();
+    };
+
+    window.addEventListener("profileUpdated", handleProfileUpdate);
+    return () => window.removeEventListener("profileUpdated", handleProfileUpdate);
+  }, [refreshProfile]);
 
   // Refresh เมื่อหน้ามี focus (Optimized: โหลดเฉพาะเมื่อเกิน 5 นาที)
   useEffect(() => {
@@ -161,8 +179,9 @@ export default function Home() {
       // โหลด Layout ใหม่
       const loadLayout = async () => {
         try {
-          const response = await fetch("/api/layout", {
-            next: { revalidate: 0 }, // Force fresh data
+          const response = await fetch(API_ENDPOINTS.LAYOUT, {
+            credentials: "include",
+            cache: "no-store",
           });
           const data = await response.json();
           
@@ -179,8 +198,9 @@ export default function Home() {
       // โหลด Theme ใหม่
       const loadTheme = async () => {
         try {
-          const response = await fetch("/api/settings", {
-            next: { revalidate: 0 }, // Force fresh data
+          const response = await fetch(API_ENDPOINTS.SETTINGS, {
+            credentials: "include",
+            cache: "no-store",
           });
           const data = await response.json();
           if (data && !data.error) {
@@ -223,9 +243,10 @@ export default function Home() {
     setSubmitting(true);
     
     try {
-      const response = await fetch("/api/contact", {
+      const response = await fetch(API_ENDPOINTS.CONTACT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           name: contactForm.name,
           email: contactForm.email,
@@ -237,7 +258,21 @@ export default function Home() {
         alert("✅ ส่งข้อความสำเร็จ! เราจะตอบกลับโดยเร็วที่สุด");
         setContactForm({ name: "", email: "", message: "" });
       } else {
-        alert("❌ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง");
+        // Parse error message จาก API
+        let errorMessage = "❌ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง";
+        try {
+          const errorData = await response.json();
+          // ถ้าเป็น validation error จะมี message เป็น array
+          if (errorData.message && Array.isArray(errorData.message)) {
+            errorMessage = errorData.message.join('\n');
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+        } catch (parseError) {
+          // ถ้า parse ไม่ได้ ใช้ข้อความ default
+          console.error("Error parsing error response:", parseError);
+        }
+        alert(errorMessage);
       }
     } catch (error) {
       console.error("Error sending message:", error);
@@ -266,24 +301,40 @@ export default function Home() {
     if (!widget.settings) return {};
     
     try {
-      const trimmed = widget.settings.trim();
+      // Remove any non-printable characters and trim
+      const cleaned = widget.settings
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Remove control characters
+        .trim();
       
-      if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
-        console.warn(`Widget ${widget.id} has invalid settings format:`, widget.settings);
+      if (!cleaned) {
         return {};
       }
       
-      const parsed = JSON.parse(trimmed);
+      // Check if it's already a valid JSON object/array
+      if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
+        console.warn(`Widget ${widget.id} has invalid JSON format (must start with { or [):`, widget.settings.substring(0, 50));
+        return {};
+      }
+      
+      // Try to fix common JSON issues
+      let fixedJson = cleaned
+        .replace(/'/g, '"') // Replace single quotes with double quotes
+        .replace(/(\w+):/g, '"$1":'); // Add quotes to unquoted keys
+      
+      const parsed = JSON.parse(fixedJson);
       
       if (typeof parsed !== 'object' || parsed === null) {
-        console.warn(`Widget ${widget.id} settings is not an object:`, parsed);
+        console.warn(`Widget ${widget.id} settings is not an object:`, typeof parsed);
         return {};
       }
       
-      return parsed;
+      return parsed as WidgetStyle;
     } catch (error) {
-      console.error(`Error parsing widget ${widget.id} settings:`, error);
-      console.log('Settings value:', widget.settings);
+      // Silent fallback - just return empty object without error
+      // This prevents the "string did not match expected pattern" error
+      if (process.env.NODE_ENV === 'development') {
+        console.debug(`Widget ${widget.id} has invalid settings, using defaults`);
+      }
       return {};
     }
   };
@@ -352,7 +403,7 @@ export default function Home() {
               </span>
             </div>
             <h1 className="text-4xl md:text-6xl font-bold leading-snug gradient-text">
-              สวัสดี ผม {profile.name}
+             {profile.name}
             </h1>
             <p className="mt-6 text-lg md:text-xl max-w-xl leading-relaxed" style={{ color: style.textColor || theme.textColor }}>
               {profile.description}
@@ -513,23 +564,46 @@ export default function Home() {
               </h3>
               
               <div className="space-y-6">
-                <div className="bg-white p-6 rounded-xl shadow-md border-2 hover:shadow-xl transition-all duration-300 hover:-translate-y-1" style={{ borderColor: theme.primaryColor }}>
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h4 className="text-lg font-bold mb-1" style={{ color: theme.textColor }}>{profile.education.university.field}</h4>
-                      <p className="font-medium text-primary">{profile.education.university.university}</p>
+                {(() => {
+                  const universityStatus = (profile.education.university as any).status || "studying";
+                  const isGraduated = universityStatus === "graduated";
+                  const universityGpa = (profile.education.university as any).gpa;
+                  
+                  return (
+                    <div className="bg-white p-6 rounded-xl shadow-md border-2 hover:shadow-xl transition-all duration-300 hover:-translate-y-1" style={{ borderColor: isGraduated ? theme.accentColor : theme.primaryColor }}>
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <h4 className="text-lg font-bold mb-1" style={{ color: theme.textColor }}>{profile.education.university.field}</h4>
+                          <p className="font-medium text-primary">{profile.education.university.university}</p>
+                        </div>
+                        {isGraduated && universityGpa ? (
+                          <span className="text-white text-sm font-bold px-4 py-2 rounded-full shadow-md whitespace-nowrap ml-2 bg-accent">
+                            GPA {universityGpa}
+                          </span>
+                        ) : (
+                          <span className="text-white text-sm font-bold px-4 py-2 rounded-full shadow-md whitespace-nowrap ml-2" style={{ 
+                            background: `linear-gradient(to right, ${theme.primaryColor}, ${theme.secondaryColor})`
+                          }}>
+                            {profile.education.university.year}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        {isGraduated ? (
+                          <span className="inline-flex items-center gap-2 text-sm font-semibold text-accent">
+                            <span>✓</span>
+                            จบการศึกษาแล้ว
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-2 text-sm font-semibold text-primary">
+                            <span className="w-2 h-2 rounded-full animate-pulse bg-primary"></span>
+                            กำลังศึกษาอยู่
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-white text-sm font-bold px-4 py-2 rounded-full shadow-md" style={{ background: `linear-gradient(to right, ${theme.primaryColor}, ${theme.secondaryColor})` }}>
-                      {profile.education.university.year}
-                    </span>
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <span className="inline-flex items-center gap-2 text-sm font-semibold text-primary">
-                      <span className="w-2 h-2 rounded-full animate-pulse bg-primary"></span>
-                      กำลังศึกษาอยู่
-                    </span>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 <div className="bg-white p-6 rounded-xl shadow-md border-2 hover:shadow-xl transition-all duration-300 hover:-translate-y-1" style={{ borderColor: theme.accentColor }}>
                   <div className="flex items-start justify-between mb-3">
@@ -643,7 +717,7 @@ export default function Home() {
                 {profile.portfolio.slice(0, displayCount).map((item, index) => (
               <div 
                 key={item.id} 
-                className="group relative rounded-xl border-2 bg-white p-6 shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 overflow-hidden"
+                className="group relative rounded-xl border-2 bg-white shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 overflow-hidden"
                 style={{ 
                   borderColor: '#e5e7eb',
                   animationDelay: `${index * 100}ms` 
@@ -652,12 +726,29 @@ export default function Home() {
                 {/* Gradient overlay on hover */}
                 <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" style={{ background: `linear-gradient(to bottom right, ${theme.primaryColor}05, ${theme.secondaryColor}05)` }}></div>
                 
-                <div className="relative z-10">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="w-12 h-12 gradient-primary rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg">
+                {/* Portfolio Image */}
+                {item.image && (
+                  <div className="relative w-full h-48 bg-gray-100 overflow-hidden">
+                    <img 
+                      src={item.image} 
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
+                    <div className="absolute top-3 left-3 w-10 h-10 gradient-primary rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-lg">
                       {index + 1}
                     </div>
                   </div>
+                )}
+                
+                <div className="relative z-10 p-6">
+                  {/* แสดงตัวเลขถ้าไม่มีรูป */}
+                  {!item.image && (
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 gradient-primary rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg">
+                        {index + 1}
+                      </div>
+                    </div>
+                  )}
                   
                   <h3 className="font-bold mb-3 text-lg group-hover:text-primary transition-colors" style={{ color: theme.textColor }}>
                     {item.title}

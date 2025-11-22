@@ -24,6 +24,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { useAdminSession } from "../../hooks/useAdminSession";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface Portfolio {
   id: number;
@@ -73,7 +74,9 @@ export default function PortfoliosPage() {
    */
   const loadPortfolios = async () => {
     try {
-      const response = await fetch("/api/profile");
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+      });
       
       if (!response.ok) {
         throw new Error('Failed to fetch profile');
@@ -122,7 +125,9 @@ export default function PortfoliosPage() {
   };
 
   /**
-   * อัปโหลดรูปภาพ - แปลงเป็น Base64
+   * อัปโหลดรูปภาพ - Resize และ Compress อัตโนมัติ
+   * - ขนาดสูงสุด: 1920x1920 px
+   * - ขนาดไฟล์เป้าหมาย: 200 KB
    */
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -133,17 +138,91 @@ export default function PortfoliosPage() {
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("ขนาดไฟล์ต้องไม่เกิน 5MB");
+    if (file.size > 10 * 1024 * 1024) {
+      alert("ขนาดไฟล์ต้องไม่เกิน 10MB");
       return;
     }
 
     setUploadingImage(true);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setFormData({ ...formData, image: reader.result as string });
+
+    // สร้าง Image object เพื่อ resize
+    const img = new window.Image();
+    const reader = new window.FileReader();
+
+    reader.onload = (e) => {
+      if (e.target?.result) {
+        img.src = e.target.result as string;
+      }
+    };
+
+    img.onload = () => {
+      // กำหนดขนาดสูงสุด
+      const MAX_WIDTH = 1920;
+      const MAX_HEIGHT = 1920;
+      const TARGET_FILE_SIZE = 200 * 1024; // 200 KB
+
+      let width = img.width;
+      let height = img.height;
+
+      // คำนวณขนาดใหม่โดยรักษาสัดส่วน
+      if (width > MAX_WIDTH) {
+        height = (height * MAX_WIDTH) / width;
+        width = MAX_WIDTH;
+      }
+
+      if (height > MAX_HEIGHT) {
+        width = (width * MAX_HEIGHT) / height;
+        height = MAX_HEIGHT;
+      }
+
+      // สร้าง canvas เพื่อ resize
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        alert("ไม่สามารถประมวลผลรูปภาพได้");
+        setUploadingImage(false);
+        return;
+      }
+
+      // วาดรูปลง canvas
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // ลอง compress จาก quality 0.9 ลงไป
+      let quality = 0.9;
+      let compressedBase64 = "";
+
+      const compressImage = () => {
+        compressedBase64 = canvas.toDataURL("image/jpeg", quality);
+        
+        // คำนวณขนาดไฟล์โดยประมาณ (Base64)
+        const base64Length = compressedBase64.length - "data:image/jpeg;base64,".length;
+        const fileSize = (base64Length * 3) / 4;
+
+        // ถ้าขนาดยังใหญ่เกินไป ลด quality ลง
+        if (fileSize > TARGET_FILE_SIZE && quality > 0.1) {
+          quality -= 0.1;
+          compressImage();
+        } else {
+          // เสร็จแล้ว
+          const finalSize = (fileSize / 1024).toFixed(2);
+          console.log(`✅ รูปภาพ compressed: ${Math.round(width)}x${Math.round(height)}, ${finalSize} KB, quality: ${quality.toFixed(1)}`);
+          
+          setFormData({ ...formData, image: compressedBase64 });
+          setUploadingImage(false);
+        }
+      };
+
+      compressImage();
+    };
+
+    img.onerror = () => {
+      alert("ไม่สามารถอ่านไฟล์รูปภาพได้");
       setUploadingImage(false);
     };
+
     reader.readAsDataURL(file);
   };
 
@@ -159,40 +238,75 @@ export default function PortfoliosPage() {
 
     setSaving(true);
     try {
-      const url = editingPortfolio
-        ? "/api/profile/portfolio"
-        : "/api/profile/portfolio";
+      let response;
       
-      const method = editingPortfolio ? "PUT" : "POST";
-      
-      const body = editingPortfolio
-        ? { ...formData, id: editingPortfolio.id }
-        : formData;
-
-      const response = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      if (editingPortfolio) {
+        // แก้ไข: ส่ง array ของ portfolios ทั้งหมดที่อัปเดตแล้ว
+        const updatedPortfolios = portfolios.map(p => 
+          p.id === editingPortfolio.id 
+            ? { 
+                title: formData.title, 
+                description: formData.description, 
+                image: formData.image, 
+                link: formData.link 
+              }
+            : { 
+                title: p.title, 
+                description: p.description, 
+                image: p.image, 
+                link: p.link 
+              }
+        );
+        
+        response = await fetch(API_ENDPOINTS.PORTFOLIO, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ portfolios: updatedPortfolios }),
+        });
+      } else {
+        // เพิ่มใหม่: ส่ง single object
+        response = await fetch(API_ENDPOINTS.PORTFOLIO, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(formData),
+        });
+      }
 
       if (response.ok) {
         // บันทึกประวัติ
-        await fetch("/api/admin/edit-history", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            page: "Portfolio",
-            action: editingPortfolio ? "update" : "create",
-            itemId: editingPortfolio?.id,
-            newValue: formData.title,
-          }),
-        });
+        try {
+          await fetch(API_ENDPOINTS.EDIT_HISTORY, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              page: "Portfolio",
+              action: editingPortfolio ? "update" : "create",
+              itemId: editingPortfolio?.id,
+              newValue: formData.title,
+            }),
+          });
+        } catch (historyError) {
+          console.warn("Failed to log edit history:", historyError);
+          // ไม่ต้อง throw error เพราะ save หลักสำเร็จแล้ว
+        }
 
         await loadPortfolios();
         handleCloseModal();
         alert(editingPortfolio ? "✅ แก้ไขผลงานสำเร็จ!" : "✅ เพิ่มผลงานสำเร็จ!");
       } else {
-        alert("❌ เกิดข้อผิดพลาดในการบันทึก");
+        let errorMessage = "Unknown error";
+        try {
+          const errorData = await response.json();
+          console.error("Error response:", errorData);
+          errorMessage = errorData.message || errorData.error || JSON.stringify(errorData);
+        } catch (parseError) {
+          console.error("Failed to parse error response");
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        alert(`❌ เกิดข้อผิดพลาดในการบันทึก: ${errorMessage}`);
       }
     } catch (error) {
       console.error("Error saving portfolio:", error);
@@ -209,8 +323,9 @@ export default function PortfoliosPage() {
     if (!confirm(`คุณต้องการลบผลงาน "${title}" หรือไม่?`)) return;
 
     try {
-      const response = await fetch(`/api/profile/portfolio?id=${id}`, {
+      const response = await fetch(`${API_ENDPOINTS.PORTFOLIO}?id=${id}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (response.ok) {

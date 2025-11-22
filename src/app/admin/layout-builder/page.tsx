@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface WidgetStyle {
   backgroundColor?: string;
@@ -58,7 +59,8 @@ export default function LayoutBuilder() {
   const loadLayout = async () => {
     try {
       setLoading(true);
-      const response = await fetch("/api/layout", {
+      const response = await fetch(`${API_ENDPOINTS.LAYOUT}?includeHidden=true`, {
+        credentials: "include",
         cache: "no-store",
       });
       const data = await response.json();
@@ -86,9 +88,10 @@ export default function LayoutBuilder() {
 
       // บันทึก widgets ทั้งหมด
       for (const widget of widgets) {
-        await fetch("/api/widgets", {
+        await fetch(API_ENDPOINTS.WIDGETS, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             id: widget.id,
             title: widget.title,
@@ -102,9 +105,10 @@ export default function LayoutBuilder() {
       }
 
       // Log การแก้ไข
-      await fetch("/api/admin/edit-history", {
+      await fetch(API_ENDPOINTS.EDIT_HISTORY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "update",
           section: "layout",
@@ -182,31 +186,173 @@ export default function LayoutBuilder() {
     if (!selectedWidget || !e.target.files || e.target.files.length === 0) return;
 
     const file = e.target.files[0];
-    const formData = new FormData();
-    formData.append("file", file);
+    
+    // ตรวจสอบประเภทไฟล์
+    if (!file.type.startsWith("image/")) {
+      showMessage("error", "❌ กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+
+    // ตรวจสอบขนาดไฟล์ต้นฉบับ (จำกัดที่ 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      showMessage("error", "❌ ขนาดไฟล์ต้องไม่เกิน 10MB");
+      return;
+    }
+
+    setUploadingImage(true);
 
     try {
-      setUploadingImage(true);
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
+      // สร้าง Image object เพื่อ resize และ compress
+      const img = new window.Image();
+      const reader = new window.FileReader();
 
-      const data = await response.json();
+      reader.onload = (e) => {
+        if (e.target?.result) {
+          img.src = e.target.result as string;
+        }
+      };
 
-      if (data.url) {
-        setSelectedWidget({
-          ...selectedWidget,
-          imageUrl: data.url,
-        });
-        showMessage("success", "✅ อัปโหลดรูปภาพสำเร็จ!");
-      } else {
-        showMessage("error", "❌ เกิดข้อผิดพลาดในการอัปโหลด");
-      }
-    } catch (error) {
+      img.onload = async () => {
+        try {
+          // กำหนดขนาดสูงสุด
+          const MAX_WIDTH = 1920;
+          const MAX_HEIGHT = 1920;
+          const TARGET_FILE_SIZE = 200 * 1024; // 200 KB
+
+          let width = img.width;
+          let height = img.height;
+
+          // คำนวณขนาดใหม่โดยรักษาสัดส่วน
+          if (width > MAX_WIDTH) {
+            height = (height * MAX_WIDTH) / width;
+            width = MAX_WIDTH;
+          }
+
+          if (height > MAX_HEIGHT) {
+            width = (width * MAX_HEIGHT) / height;
+            height = MAX_HEIGHT;
+          }
+
+          // สร้าง canvas เพื่อ resize
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            showMessage("error", "❌ ไม่สามารถประมวลผลรูปภาพได้");
+            setUploadingImage(false);
+            return;
+          }
+
+          // วาดรูปลง canvas
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Compress รูปภาพ
+          let quality = 0.9;
+          let compressedBlob: Blob | null = null;
+
+          const compressImage = (): Promise<Blob> => {
+            return new Promise((resolve) => {
+              canvas.toBlob(
+                (blob) => {
+                  if (!blob) {
+                    resolve(new Blob());
+                    return;
+                  }
+
+                  // ถ้าขนาดยังใหญ่เกินไป ลด quality ลง
+                  if (blob.size > TARGET_FILE_SIZE && quality > 0.1) {
+                    quality -= 0.1;
+                    compressImage().then(resolve);
+                  } else {
+                    resolve(blob);
+                  }
+                },
+                "image/jpeg",
+                quality
+              );
+            });
+          };
+
+          compressedBlob = await compressImage();
+          const finalSize = (compressedBlob.size / 1024).toFixed(2);
+          console.log(`✅ รูปภาพ compressed: ${Math.round(width)}x${Math.round(height)}, ${finalSize} KB, quality: ${quality.toFixed(1)}`);
+
+          // สร้าง FormData จาก compressed blob
+          const formData = new FormData();
+          formData.append("file", compressedBlob, file.name);
+
+          // สร้าง URL พร้อม widgetId query parameter
+          const uploadUrl = selectedWidget.id 
+            ? `${API_ENDPOINTS.UPLOAD_WIDGET}?widgetId=${selectedWidget.id}`
+            : API_ENDPOINTS.UPLOAD_WIDGET;
+
+          // อัปโหลดไปยัง backend โดยใช้ endpoint สำหรับ widget
+          const response = await fetch(uploadUrl, {
+            method: "POST",
+            credentials: "include",
+            body: formData,
+          });
+
+          // ตรวจสอบ response และ parse JSON
+          let data;
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            try {
+              data = await response.json();
+            } catch (jsonError) {
+              const text = await response.text();
+              throw new Error(text || `HTTP ${response.status}: ${response.statusText}`);
+            }
+          } else {
+            const text = await response.text();
+            throw new Error(text || `HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          if (!response.ok) {
+            // แสดงข้อความ error จาก backend
+            const errorMessage = data?.message || data?.error || `HTTP ${response.status}: ${response.statusText}`;
+            throw new Error(errorMessage);
+          }
+
+          // Backend ส่งกลับมาเป็น full URL และบันทึกลง database แล้ว
+          const imageUrl = data.imageUrl || data.url;
+          if (imageUrl) {
+            // อัปเดต state เพื่อแสดงผลทันที (แม้ว่าจะบันทึกลง database แล้ว)
+            setSelectedWidget({
+              ...selectedWidget,
+              imageUrl: imageUrl,
+            });
+            
+            // อัปเดต widgets state ด้วย
+            setWidgets(widgets.map(w => 
+              w.id === selectedWidget.id ? { ...w, imageUrl: imageUrl } : w
+            ));
+            
+            showMessage("success", "✅ อัปโหลดรูปภาพสำเร็จและบันทึกลงฐานข้อมูลแล้ว!");
+          } else {
+            showMessage("error", "❌ เกิดข้อผิดพลาดในการอัปโหลด: ไม่ได้รับ URL รูปภาพ");
+          }
+        } catch (error: any) {
+          console.error("Error uploading image:", error);
+          // แสดงข้อความ error ที่ชัดเจน
+          const errorMessage = error.message || "เกิดข้อผิดพลาดในการอัปโหลด";
+          showMessage("error", `❌ ${errorMessage}`);
+        } finally {
+          setUploadingImage(false);
+        }
+      };
+
+      img.onerror = () => {
+        showMessage("error", "❌ ไม่สามารถอ่านไฟล์รูปภาพได้");
+        setUploadingImage(false);
+      };
+
+      reader.readAsDataURL(file);
+    } catch (error: any) {
       console.error("Error uploading image:", error);
-      showMessage("error", "❌ เกิดข้อผิดพลาดในการอัปโหลด");
-    } finally {
+      showMessage("error", `❌ ${error.message || "เกิดข้อผิดพลาดในการอัปโหลด"}`);
       setUploadingImage(false);
     }
   };

@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAdminSession } from "../../hooks/useAdminSession";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface ContactMessage {
   id: number;
@@ -60,7 +61,9 @@ export default function MessagesPage() {
    */
   const loadMessages = async () => {
     try {
-      const response = await fetch("/api/contact");
+      const response = await fetch(API_ENDPOINTS.CONTACT, {
+        credentials: "include",
+      });
       const data = await response.json();
       setMessages(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -88,9 +91,10 @@ export default function MessagesPage() {
    */
   const handleMarkAsRead = async (id: number, currentStatus: boolean) => {
     try {
-      const response = await fetch("/api/contact", {
+      const response = await fetch(API_ENDPOINTS.CONTACT, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ id, isRead: !currentStatus }),
       });
 
@@ -112,8 +116,9 @@ export default function MessagesPage() {
     if (!confirm(`คุณต้องการลบข้อความจาก "${name}" หรือไม่?`)) return;
 
     try {
-      const response = await fetch(`/api/contact?id=${id}`, {
+      const response = await fetch(`${API_ENDPOINTS.CONTACT}?id=${id}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (response.ok) {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 const SESSION_TIMEOUT = 10 * 60 * 1000; // 30 นาที
 const INACTIVITY_CHECK_INTERVAL = 60 * 1000; // ตรวจสอบทุก 1 นาที
@@ -11,7 +12,10 @@ export function useAdminSession() {
 
   const logout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch(API_ENDPOINTS.LOGOUT, { 
+        method: "POST",
+        credentials: "include"
+      });
     } catch (error) {
       console.error("Logout error:", error);
     } finally {

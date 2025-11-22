@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAdminSession } from "../../hooks/useAdminSession";
 import { useProfile } from "../../context/ProfileContext";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface Education {
   id: number;
@@ -13,6 +14,7 @@ interface Education {
   institution: string;
   year?: string;
   gpa?: string;
+  status?: string;
 }
 
 interface Experience {
@@ -27,9 +29,11 @@ interface Experience {
 export default function EducationExperiencePage() {
   const router = useRouter();
   useAdminSession();
-  const { profile, updateProfile, updateExperience } = useProfile();
+  const { profile, updateProfile, updateExperience, refreshProfile } = useProfile();
   const [authenticated, setAuthenticated] = useState(false);
   const [saving, setSaving] = useState(false);
+  const isSavingRef = useRef(false); // ใช้ ref เพื่อป้องกัน useEffect override ค่าขณะกำลังบันทึก
+  const isInitialLoadRef = useRef(true); // ใช้ ref เพื่อตรวจสอบว่าเป็นครั้งแรกที่โหลดหรือไม่
 
   // Education form
   const [educationData, setEducationData] = useState({
@@ -37,6 +41,8 @@ export default function EducationExperiencePage() {
       field: profile.education.university.field,
       university: profile.education.university.university,
       year: profile.education.university.year,
+      gpa: (profile.education.university as any).gpa || "", // เพิ่ม GPA สำหรับมหาวิทยาลัย
+      status: (profile.education.university as any).status || "studying", // กำลังศึกษา หรือ จบการศึกษาแล้ว
     },
     highschool: {
       field: profile.education.highschool.field,
@@ -68,24 +74,35 @@ export default function EducationExperiencePage() {
   }, [router]);
 
   useEffect(() => {
-    setEducationData({
-      university: {
-        field: profile.education.university.field,
-        university: profile.education.university.university,
-        year: profile.education.university.year,
-      },
-      highschool: {
-        field: profile.education.highschool.field,
-        school: profile.education.highschool.school,
-        gpa: profile.education.highschool.gpa,
-      },
-    });
-    setExperiences(profile.experience || []);
+    // อัปเดตข้อมูลเฉพาะเมื่อ:
+    // 1. เป็นครั้งแรกที่โหลด (initial load)
+    // 2. ไม่ใช่ตอนกำลังบันทึก (isSavingRef.current === false)
+    // 3. profile มีข้อมูลจริง (ไม่ใช่ empty object)
+    if ((isInitialLoadRef.current || !isSavingRef.current) && profile.education) {
+      setEducationData({
+        university: {
+          field: profile.education.university.field,
+          university: profile.education.university.university,
+          year: profile.education.university.year,
+          gpa: (profile.education.university as any).gpa || "",
+          status: (profile.education.university as any).status || "studying",
+        },
+        highschool: {
+          field: profile.education.highschool.field,
+          school: profile.education.highschool.school,
+          gpa: profile.education.highschool.gpa,
+        },
+      });
+      setExperiences(profile.experience || []);
+      isInitialLoadRef.current = false;
+    }
   }, [profile]);
 
   const loadExperiences = async () => {
     try {
-      const response = await fetch("/api/profile/experience");
+      const response = await fetch(API_ENDPOINTS.EXPERIENCE, {
+        credentials: "include",
+      });
       const data = await response.json();
       setExperiences(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -95,28 +112,100 @@ export default function EducationExperiencePage() {
 
   const handleSaveEducation = async () => {
     setSaving(true);
+    isSavingRef.current = true; // ตั้งค่า flag เพื่อป้องกัน useEffect override ค่า
     try {
-      await updateProfile({
-        education: educationData,
-      });
-
-      await fetch("/api/admin/edit-history", {
-        method: "POST",
+      // ตรวจสอบข้อมูลก่อนส่ง
+      console.log("📤 Sending education data:", educationData);
+      
+      // ส่งข้อมูลการศึกษาไปยัง API โดยตรง
+      const response = await fetch(API_ENDPOINTS.EDUCATION, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          page: "Education",
-          action: "update",
-          newValue: "Updated education information",
-        }),
+        credentials: "include",
+        body: JSON.stringify({ education: educationData }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        console.error("❌ API Error:", errorData);
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log("✅ Education saved:", result);
+
+      // บันทึกประวัติการแก้ไข
+      try {
+        await fetch(API_ENDPOINTS.EDIT_HISTORY, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            page: "Education",
+            action: "update",
+            newValue: "Updated education information",
+          }),
+        });
+      } catch (historyError) {
+        console.warn("⚠️ Failed to save edit history:", historyError);
+      }
+
+      // Fetch ข้อมูลใหม่โดยตรงเพื่อให้แน่ใจว่าข้อมูลอัปเดต (ไม่ใช้ refreshProfile เพราะจะ trigger useEffect)
+      try {
+        const refreshResponse = await fetch(API_ENDPOINTS.PROFILE, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (refreshResponse.ok) {
+          const updatedProfile = await refreshResponse.json();
+          if (!updatedProfile.error) {
+            // อัปเดต educationData จากข้อมูลใหม่ที่ fetch มา
+            const newEducationData = {
+              university: {
+                field: updatedProfile.education?.university?.field || "",
+                university: updatedProfile.education?.university?.university || "",
+                year: updatedProfile.education?.university?.year || "",
+                gpa: updatedProfile.education?.university?.gpa || "",
+                status: updatedProfile.education?.university?.status || "studying",
+              },
+              highschool: {
+                field: updatedProfile.education?.highschool?.field || "",
+                school: updatedProfile.education?.highschool?.school || "",
+                gpa: updatedProfile.education?.highschool?.gpa || "",
+              },
+            };
+            
+            setEducationData(newEducationData);
+            console.log("✅ Education data updated from server:", newEducationData);
+            
+            // รอให้ state อัปเดตก่อนค่อย refresh profile
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+      } catch (refreshError) {
+        console.warn("⚠️ Failed to refresh profile data:", refreshError);
+      }
+      
+      // Refresh profile เพื่อให้หน้าอื่นอัปเดต (หลังจากอัปเดต educationData แล้ว)
+      console.log("🔄 Refreshing profile...");
+      await refreshProfile();
+      
+      // รอให้ profile state อัปเดตก่อนค่อย set flag เป็น false
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Dispatch event เพื่อให้หน้าอื่นรู้ว่ามีการอัปเดต
       window.dispatchEvent(new Event("profileUpdated"));
+      
       alert("✅ บันทึกข้อมูลการศึกษาสำเร็จ!");
-    } catch (error) {
-      console.error("Error saving:", error);
-      alert("❌ เกิดข้อผิดพลาดในการบันทึก");
+    } catch (error: any) {
+      console.error("❌ Error saving education:", error);
+      alert(`❌ เกิดข้อผิดพลาดในการบันทึก: ${error.message || error}`);
     } finally {
-      setSaving(false);
+      // รอให้ทุกอย่างเสร็จก่อนค่อย set flag เป็น false
+      setTimeout(() => {
+        setSaving(false);
+        isSavingRef.current = false;
+      }, 300);
     }
   };
 
@@ -127,9 +216,10 @@ export default function EducationExperiencePage() {
     }
 
     try {
-      const response = await fetch("/api/profile/experience", {
+      const response = await fetch(API_ENDPOINTS.EXPERIENCE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(newExp),
       });
 
@@ -155,9 +245,10 @@ export default function EducationExperiencePage() {
     if (!editingExp) return;
 
     try {
-      const response = await fetch("/api/profile/experience", {
+      const response = await fetch(API_ENDPOINTS.EXPERIENCE, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(editingExp),
       });
 
@@ -176,8 +267,9 @@ export default function EducationExperiencePage() {
     if (!confirm("คุณต้องการลบประสบการณ์นี้หรือไม่?")) return;
 
     try {
-      const response = await fetch(`/api/profile/experience?id=${id}`, {
+      const response = await fetch(`${API_ENDPOINTS.EXPERIENCE}?id=${id}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (!response.ok) {
@@ -255,8 +347,33 @@ export default function EducationExperiencePage() {
 
             {/* มหาวิทยาลัย */}
             <div className="bg-blue-50 rounded-xl p-6 mb-4">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">🎓 มหาวิทยาลัย</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-gray-900">🎓 มหาวิทยาลัย</h3>
+                {educationData.university.status === "graduated" && (
+                  <span className="bg-green-100 text-green-800 text-xs font-semibold px-3 py-1 rounded-full">
+                    ✅ จบการศึกษาแล้ว
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    สถานะการศึกษา
+                  </label>
+                  <select
+                    value={educationData.university.status}
+                    onChange={(e) =>
+                      setEducationData({
+                        ...educationData,
+                        university: { ...educationData.university, status: e.target.value },
+                      })
+                    }
+                    className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none bg-white"
+                  >
+                    <option value="studying">กำลังศึกษา</option>
+                    <option value="graduated">จบการศึกษาแล้ว</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">
                     สาขาวิชา
@@ -271,6 +388,7 @@ export default function EducationExperiencePage() {
                       })
                     }
                     className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
+                    placeholder="เช่น สาขาวิชาคอมพิวเตอร์"
                   />
                 </div>
                 <div>
@@ -287,25 +405,54 @@ export default function EducationExperiencePage() {
                       })
                     }
                     className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
+                    placeholder="เช่น มหาวิทยาลัยราชภัฏภูเก็ต"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    ปีการศึกษา
-                  </label>
-                  <input
-                    type="text"
-                    value={educationData.university.year}
-                    onChange={(e) =>
-                      setEducationData({
-                        ...educationData,
-                        university: { ...educationData.university, year: e.target.value },
-                      })
-                    }
-                    className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
+                {educationData.university.status === "graduated" ? (
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">
+                      เกรดเฉลี่ย (GPA)
+                    </label>
+                    <input
+                      type="text"
+                      value={educationData.university.gpa}
+                      onChange={(e) =>
+                        setEducationData({
+                          ...educationData,
+                          university: { ...educationData.university, gpa: e.target.value },
+                        })
+                      }
+                      className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
+                      placeholder="เช่น 3.50"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">
+                      ปีการศึกษา
+                    </label>
+                    <input
+                      type="text"
+                      value={educationData.university.year}
+                      onChange={(e) =>
+                        setEducationData({
+                          ...educationData,
+                          university: { ...educationData.university, year: e.target.value },
+                        })
+                      }
+                      className="w-full rounded-lg border-2 border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
+                      placeholder="เช่น ปี 4"
+                    />
+                  </div>
+                )}
               </div>
+              {educationData.university.status === "graduated" && (
+                <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-sm text-green-800">
+                    💡 <strong>หมายเหตุ:</strong> คุณสามารถแก้ไขข้อมูลการศึกษาได้แม้ว่าจะจบการศึกษาแล้ว
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* มัธยม */}

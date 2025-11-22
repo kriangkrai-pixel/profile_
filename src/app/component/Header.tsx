@@ -1,17 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 export default function Header() {
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [logoText, setLogoText] = useState("KRIANGKRAI.P");
+  const [bgColor, setBgColor] = useState("#ffffff");
+  const [textColor, setTextColor] = useState("#1f2937");
 
   // ซ่อน Header ในหน้า admin
   if (pathname?.startsWith("/admin")) {
     return null;
   }
+
+  // โหลด settings จาก API
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const response = await fetch(API_ENDPOINTS.SETTINGS, {
+          credentials: "include",
+        });
+        const data = await response.json();
+        if (data && !data.error) {
+          if (data.headerLogoText) setLogoText(data.headerLogoText);
+          if (data.headerBgColor) setBgColor(data.headerBgColor);
+          if (data.headerTextColor) setTextColor(data.headerTextColor);
+        }
+      } catch (error) {
+        console.error("Error loading header settings:", error);
+      }
+    };
+    loadSettings();
+  }, []);
 
   // ปิดเมนูเมื่อคลิกลิงก์
   const closeMenu = () => {
@@ -49,15 +73,19 @@ export default function Header() {
   };
 
   return (
-    <header className="bg-white shadow-md sticky top-0 z-50">
+    <header 
+      className="shadow-md sticky top-0 z-50"
+      style={{ backgroundColor: bgColor }}
+    >
       <div className="max-w-6xl mx-auto flex items-center justify-between p-4">
         {/* โลโก้ */}
         <Link 
           href="/" 
           onClick={closeMenu}
-          className="text-xl md:text-2xl font-bold text-gray-800 hover:text-blue-600 transition-colors"
+          className="text-xl md:text-2xl font-bold hover:text-blue-600 transition-colors"
+          style={{ color: textColor }}
         >
-          KRIANGKRAI.P
+          {logoText}
         </Link>
 
         {/* Hamburger Button (Mobile) */}
@@ -67,25 +95,28 @@ export default function Header() {
           aria-label="Toggle menu"
         >
           <span
-            className={`block w-6 h-0.5 bg-gray-800 transition-all duration-300 ${
+            className={`block w-6 h-0.5 transition-all duration-300 ${
               isMenuOpen ? "rotate-45 translate-y-2" : ""
             }`}
+            style={{ backgroundColor: textColor }}
           ></span>
           <span
-            className={`block w-6 h-0.5 bg-gray-800 transition-all duration-300 ${
+            className={`block w-6 h-0.5 transition-all duration-300 ${
               isMenuOpen ? "opacity-0" : ""
             }`}
+            style={{ backgroundColor: textColor }}
           ></span>
           <span
-            className={`block w-6 h-0.5 bg-gray-800 transition-all duration-300 ${
+            className={`block w-6 h-0.5 transition-all duration-300 ${
               isMenuOpen ? "-rotate-45 -translate-y-2" : ""
             }`}
+            style={{ backgroundColor: textColor }}
           ></span>
         </button>
 
         {/* เมนู Desktop */}
         <nav className="hidden md:block">
-          <ul className="flex space-x-6 text-gray-700 font-medium">
+          <ul className="flex space-x-6 font-medium" style={{ color: textColor }}>
             {pathname === "/" ? (
               // ถ้าอยู่หน้าแรก แสดง section links
               <>
@@ -184,13 +215,14 @@ export default function Header() {
 
         {/* เมนู Mobile */}
         <nav
-          className={`md:hidden absolute top-full left-0 right-0 bg-white shadow-lg transition-all duration-300 ease-in-out ${
+          className={`md:hidden absolute top-full left-0 right-0 shadow-lg transition-all duration-300 ease-in-out ${
             isMenuOpen
               ? "max-h-screen opacity-100"
               : "max-h-0 opacity-0 overflow-hidden"
           }`}
+          style={{ backgroundColor: bgColor }}
         >
-          <ul className="flex flex-col text-gray-700 font-medium">
+          <ul className="flex flex-col font-medium" style={{ color: textColor }}>
             {pathname === "/" ? (
               // ถ้าอยู่หน้าแรก แสดง section links
               <>

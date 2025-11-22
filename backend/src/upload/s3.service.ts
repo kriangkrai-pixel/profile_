@@ -1,0 +1,217 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+
+@Injectable()
+export class S3Service {
+  private readonly logger = new Logger(S3Service.name);
+  private readonly s3Client: S3Client;
+  private readonly bucket: string;
+  private readonly publicUrl: string;
+  private readonly cdnUrl?: string;
+  private readonly apiBaseUrl: string;
+
+  constructor(private configService: ConfigService) {
+    const endpoint = this.configService.get<string>('DO_SPACES_ENDPOINT');
+    const region = this.configService.get<string>('DO_SPACES_REGION');
+    const accessKeyId = this.configService.get<string>('DO_SPACES_KEY');
+    const secretAccessKey = this.configService.get<string>('DO_SPACES_SECRET');
+
+    if (!endpoint || !region || !accessKeyId || !secretAccessKey) {
+      throw new Error('Missing DigitalOcean Spaces configuration');
+    }
+
+    this.bucket = this.configService.get<string>('DO_SPACES_BUCKET') || '';
+    this.publicUrl = this.configService.get<string>('DO_SPACES_PUBLIC_URL') || '';
+    this.cdnUrl = this.configService.get<string>('DO_SPACES_CDN_URL');
+    
+    // สร้าง API base URL จาก PORT หรือใช้ environment variable
+    const port = this.configService.get<string>('PORT') || '3001';
+    const apiBaseUrlEnv = this.configService.get<string>('API_BASE_URL') || 
+                          this.configService.get<string>('NEXT_PUBLIC_API_URL');
+    
+    if (apiBaseUrlEnv) {
+      this.apiBaseUrl = apiBaseUrlEnv;
+    } else {
+      // สร้าง URL จาก PORT (สำหรับ development)
+      this.apiBaseUrl = `http://localhost:${port}/api`;
+    }
+
+    this.s3Client = new S3Client({
+      endpoint,
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+      forcePathStyle: false,
+    });
+
+    this.logger.log('S3Service initialized');
+  }
+
+  /**
+   * สร้าง unique filename เพื่อป้องกันการชนกัน
+   */
+  private generateUniqueFileName(originalName: string): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 15);
+    const extension = originalName.split('.').pop();
+    const nameWithoutExt = originalName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '-');
+    return `${nameWithoutExt}-${timestamp}-${random}.${extension}`;
+  }
+
+  /**
+   * อัปโหลดไฟล์ไปยัง DigitalOcean Spaces
+   * @param file ไฟล์ที่ต้องการอัปโหลด
+   * @param type ประเภทไฟล์ (profile, portfolio, widget)
+   * @returns relative path ของไฟล์ที่อัปโหลด (เช่น /uploads/portfolio/image.jpg)
+   */
+  async uploadFile(file: Express.Multer.File, type: string): Promise<string> {
+    if (!file) {
+      throw new Error('No file provided');
+    }
+
+    // Validate type
+    const allowedTypes = ['profile', 'portfolio', 'widget'];
+    if (!allowedTypes.includes(type)) {
+      throw new Error(`Invalid type. Allowed types: ${allowedTypes.join(', ')}`);
+    }
+
+    // สร้าง unique filename
+    const uniqueFileName = this.generateUniqueFileName(file.originalname);
+    const key = `uploads/${type}/${uniqueFileName}`;
+
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'private', // ทำให้ไฟล์เป็น private (ไม่สามารถเข้าถึงได้โดยตรง)
+      });
+
+      await this.s3Client.send(command);
+      this.logger.log(`File uploaded successfully: ${key} (private)`);
+
+      // Return relative path โดยไม่มี leading slash (เช่น uploads/widget/image.jpg)
+      // เพื่อให้บันทึกลง database ได้ง่าย และ getProxyUrl จะจัดการ leading slash ให้เอง
+      return key;
+    } catch (error) {
+      this.logger.error(`Error uploading file: ${error.message}`, error.stack);
+      throw new Error(`Failed to upload file: ${error.message}`);
+    }
+  }
+
+  /**
+   * อ่านไฟล์จาก DigitalOcean Spaces (private files)
+   * @param relativePath relative path ของไฟล์ (เช่น /uploads/portfolio/image.jpg)
+   * @returns Buffer และ ContentType ของไฟล์
+   */
+  async getFile(relativePath: string): Promise<{ body: Buffer; contentType: string }> {
+    if (!relativePath) {
+      throw new Error('No path provided');
+    }
+
+    // ลบ / หน้าแรกถ้ามี
+    const key = relativePath.startsWith('/') ? relativePath.substring(1) : relativePath;
+
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      if (!response.Body) {
+        throw new Error('File not found');
+      }
+
+      // Convert stream to buffer
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.Body as any) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+
+      const contentType = response.ContentType || 'application/octet-stream';
+
+      this.logger.log(`File retrieved successfully: ${key}`);
+      return { body: buffer, contentType };
+    } catch (error: any) {
+      this.logger.error(`Error retrieving file: ${error.message}`, error.stack);
+      throw new Error(`Failed to retrieve file: ${error.message}`);
+    }
+  }
+
+  /**
+   * สร้าง proxy URL จาก relative path
+   * @param relativePath relative path ของไฟล์ (เช่น /uploads/portfolio/image.jpg)
+   * @returns full proxy URL สำหรับ frontend (เช่น http://localhost:3001/api/images/uploads/portfolio/image.jpg)
+   */
+  getProxyUrl(relativePath: string): string {
+    if (!relativePath) {
+      return '';
+    }
+
+    // ลบ / หน้าแรกถ้ามี
+    const path = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
+    
+    // สร้าง full proxy URL โดยใช้ API_BASE_URL
+    // ลบ /api ท้าย API_BASE_URL ถ้ามี (เพราะเราจะเพิ่ม /api/images เอง)
+    let baseUrl = this.apiBaseUrl;
+    if (baseUrl.endsWith('/api')) {
+      baseUrl = baseUrl.slice(0, -4); // ลบ /api
+    } else if (baseUrl.endsWith('/api/')) {
+      baseUrl = baseUrl.slice(0, -5); // ลบ /api/
+    }
+    
+    return `${baseUrl}/api/images${path}`;
+  }
+
+  /**
+   * ลบไฟล์จาก DigitalOcean Spaces
+   * @param path relative path ของไฟล์ที่ต้องการลบ (เช่น /uploads/profile/image.jpg)
+   * @returns true ถ้าลบสำเร็จ
+   */
+  async deleteFile(path: string): Promise<boolean> {
+    if (!path) {
+      throw new Error('No path provided');
+    }
+
+    // ลบ / หน้าแรกถ้ามี
+    const key = path.startsWith('/') ? path.substring(1) : path;
+
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      await this.s3Client.send(command);
+      this.logger.log(`File deleted successfully: ${key}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`Error deleting file: ${error.message}`, error.stack);
+      throw new Error(`Failed to delete file: ${error.message}`);
+    }
+  }
+
+  /**
+   * สร้าง full URL จาก relative path
+   * @param relativePath relative path ของไฟล์
+   * @returns full URL
+   */
+  getPublicUrl(relativePath: string): string {
+    const baseUrl = this.cdnUrl || this.publicUrl;
+    if (!baseUrl) {
+      throw new Error('No public URL configured');
+    }
+    
+    // ลบ / หน้าแรกถ้ามี
+    const path = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
+    return `${baseUrl}${path}`;
+  }
+}
+

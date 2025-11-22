@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAdminSession } from "../../hooks/useAdminSession";
 import { useProfile } from "../../context/ProfileContext";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 export default function AboutPage() {
   const router = useRouter();
@@ -66,9 +67,10 @@ export default function AboutPage() {
       });
 
       // Log history
-      await fetch("/api/admin/edit-history", {
+      await fetch(API_ENDPOINTS.EDIT_HISTORY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           page: "About",
           action: "update",

@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface Portfolio {
   id: number;
@@ -48,7 +49,9 @@ export default function PortfolioDetailPage() {
    */
   const loadPortfolio = async () => {
     try {
-      const response = await fetch("/api/profile");
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+      });
       const data = await response.json();
       
       if (data.portfolio && Array.isArray(data.portfolio)) {

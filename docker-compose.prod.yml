@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # MySQL Database with Optimization
+  db:
+    image: mysql:8.0
+    container_name: profile_db_prod
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: profile_db
+      MYSQL_USER: ${DB_USER:-profile_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-profile_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-config.cnf:/etc/mysql/conf.d/custom.cnf
+    command: --max-connections=200 --innodb-buffer-pool-size=1G
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - app-network
+
+  # Redis Cache (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: profile_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - app-network
+
+  # Nginx Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: profile_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend-1
+      - backend-2
+      - frontend
+    networks:
+      - app-network
+
+  # Backend Instance 1
+  backend-1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: profile_backend_1
+    restart: always
+    environment:
+      - DATABASE_URL=mysql://${DB_USER:-profile_user}:${DB_PASSWORD:-profile_password}@db:3306/profile_db?connection_limit=20&pool_timeout=20&connect_timeout=10
+      - PORT=3001
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - NODE_ENV=production
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # Backend Instance 2
+  backend-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: profile_backend_2
+    restart: always
+    environment:
+      - DATABASE_URL=mysql://${DB_USER:-profile_user}:${DB_PASSWORD:-profile_password}@db:3306/profile_db?connection_limit=20&pool_timeout=20&connect_timeout=10
+      - PORT=3002
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - NODE_ENV=production
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: profile_frontend
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+    depends_on:
+      - backend-1
+      - backend-2
+    networks:
+      - app-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge
+

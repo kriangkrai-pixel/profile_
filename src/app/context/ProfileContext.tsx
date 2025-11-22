@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface ProfileData {
   name: string;
@@ -18,6 +19,8 @@ interface ProfileData {
       field: string;
       university: string;
       year: string;
+      gpa?: string; // GPA สำหรับมหาวิทยาลัย (เมื่อจบการศึกษาแล้ว)
+      status?: string; // "studying" หรือ "graduated"
     };
     highschool: {
       field: string;
@@ -56,6 +59,7 @@ const defaultProfile: ProfileData = {
       field: "สาขาวิชาคอมพิวเตอร์",
       university: "มหาวิทยาลัยราชภัฏภูเก็ต",
       year: "ปี 4",
+      status: "studying",
     },
     highschool: {
       field: "คณิต-อังกฤษ",
@@ -96,8 +100,9 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   // ฟังก์ชันสำหรับโหลดข้อมูลจาก API
   const fetchProfile = async () => {
     try {
-      const response = await fetch("/api/profile", {
-        next: { revalidate: 30 }, // Cache 30 วินาที
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+        cache: "no-store",
       });
       const data = await response.json();
       
@@ -176,9 +181,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     try {
       // อัปเดตข้อมูลหลัก
       if (data.name || data.email || data.phone || data.location || data.description || data.bio || data.achievement || data.heroImage !== undefined || data.contactImage !== undefined) {
-        await fetch("/api/profile", {
+        await fetch(API_ENDPOINTS.PROFILE, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             name: data.name,
             email: data.email,
@@ -195,25 +201,28 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
       // อัปเดตทักษะ
       if (data.skills) {
-        await fetch("/api/profile/skills", {
+        await fetch(API_ENDPOINTS.SKILLS, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({ skills: data.skills }),
         });
       }
 
       // อัปเดตการศึกษา
       if (data.education) {
-        await fetch("/api/profile/education", {
+        await fetch(API_ENDPOINTS.EDUCATION, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({ education: data.education }),
         });
       }
 
       // Refresh ข้อมูลจาก API เพื่อให้แน่ใจว่าข้อมูลตรงกับ database
-      const response = await fetch("/api/profile", {
-        next: { revalidate: 0 }, // Force fresh data after update
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+        cache: "no-store",
       });
       if (response.ok) {
         const updatedData = await response.json();
@@ -251,14 +260,17 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const updatePortfolio = async (portfolio: ProfileData["portfolio"]) => {
     try {
-      await fetch("/api/profile/portfolio", {
+      await fetch(API_ENDPOINTS.PORTFOLIO, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ portfolios: portfolio }),
       });
 
       // Refresh ข้อมูลจาก API เพื่อให้แน่ใจว่าข้อมูลตรงกับ database
-      const response = await fetch("/api/profile");
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+      });
       if (response.ok) {
         const updatedData = await response.json();
         if (!updatedData.error) {
@@ -286,14 +298,17 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const updateExperience = async (experience: ProfileData["experience"]) => {
     try {
-      await fetch("/api/profile/experience", {
+      await fetch(API_ENDPOINTS.EXPERIENCE, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ experiences: experience }),
       });
 
       // Refresh ข้อมูลจาก API เพื่อให้แน่ใจว่าข้อมูลตรงกับ database
-      const response = await fetch("/api/profile");
+      const response = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
+      });
       if (response.ok) {
         const updatedData = await response.json();
         if (!updatedData.error) {

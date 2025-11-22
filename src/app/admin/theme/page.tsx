@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAdminSession } from "../../hooks/useAdminSession";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 interface SiteSettings {
   id?: number;
@@ -32,7 +33,9 @@ interface SiteSettings {
   backgroundColor: string;
   textColor: string;
   headerBgColor: string;
+  headerTextColor: string;
   footerBgColor: string;
+  footerTextColor: string;
 }
 
 const defaultSettings: SiteSettings = {
@@ -42,7 +45,9 @@ const defaultSettings: SiteSettings = {
   backgroundColor: "#ffffff",
   textColor: "#1f2937",
   headerBgColor: "#ffffff",
+  headerTextColor: "#1f2937",
   footerBgColor: "#1f2937",
+  footerTextColor: "#ffffff",
 };
 
 export default function ThemeSettingsPage() {
@@ -68,7 +73,9 @@ export default function ThemeSettingsPage() {
    */
   const loadSettings = async () => {
     try {
-      const response = await fetch("/api/settings");
+      const response = await fetch(API_ENDPOINTS.SETTINGS, {
+        credentials: "include",
+      });
       const data = await response.json();
       if (data && !data.error) {
         setSettings(data);
@@ -86,9 +93,10 @@ export default function ThemeSettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const response = await fetch("/api/settings", {
+      const response = await fetch(API_ENDPOINTS.SETTINGS, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(settings),
       });
 
@@ -322,6 +330,31 @@ export default function ThemeSettingsPage() {
                   </div>
                 </div>
 
+                {/* Header Text Color */}
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    สีตัวอักษร Header
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="color"
+                      value={settings.headerTextColor}
+                      onChange={(e) =>
+                        setSettings({ ...settings, headerTextColor: e.target.value })
+                      }
+                      className="w-20 h-12 rounded-lg border-2 border-gray-300 cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={settings.headerTextColor}
+                      onChange={(e) =>
+                        setSettings({ ...settings, headerTextColor: e.target.value })
+                      }
+                      className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-2 font-mono"
+                    />
+                  </div>
+                </div>
+
                 {/* Footer BG Color */}
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">
@@ -341,6 +374,31 @@ export default function ThemeSettingsPage() {
                       value={settings.footerBgColor}
                       onChange={(e) =>
                         setSettings({ ...settings, footerBgColor: e.target.value })
+                      }
+                      className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Footer Text Color */}
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    สีตัวอักษร Footer
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="color"
+                      value={settings.footerTextColor}
+                      onChange={(e) =>
+                        setSettings({ ...settings, footerTextColor: e.target.value })
+                      }
+                      className="w-20 h-12 rounded-lg border-2 border-gray-300 cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={settings.footerTextColor}
+                      onChange={(e) =>
+                        setSettings({ ...settings, footerTextColor: e.target.value })
                       }
                       className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-2 font-mono"
                     />
@@ -410,7 +468,7 @@ export default function ThemeSettingsPage() {
                   >
                     <div
                       className="text-lg font-bold"
-                      style={{ color: settings.primaryColor }}
+                      style={{ color: settings.headerTextColor }}
                     >
                       Header Example
                     </div>
@@ -452,7 +510,10 @@ export default function ThemeSettingsPage() {
                     className="rounded-lg p-4 shadow-md"
                     style={{ backgroundColor: settings.footerBgColor }}
                   >
-                    <p className="text-center text-white text-sm">
+                    <p
+                      className="text-center text-sm"
+                      style={{ color: settings.footerTextColor }}
+                    >
                       © 2025 Your Website. All rights reserved.
                     </p>
                   </div>

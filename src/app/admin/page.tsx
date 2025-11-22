@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAdminSession } from "../hooks/useAdminSession";
+import { API_ENDPOINTS } from "@/lib/api-config";
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -52,9 +53,9 @@ export default function AdminDashboard() {
   const loadStats = async () => {
     try {
       // ดึงข้อมูล Profile ที่มีทั้ง Portfolio และ Experience
-      const profileRes = await fetch("/api/profile", {
+      const profileRes = await fetch(API_ENDPOINTS.PROFILE, {
+        credentials: "include",
         cache: "no-store",
-        headers: { "Cache-Control": "no-cache" },
       });
       
       if (!profileRes.ok) {
@@ -84,7 +85,8 @@ export default function AdminDashboard() {
       // ดึงจำนวนข้อความที่ยังไม่อ่าน
       let unreadCount = 0;
       try {
-        const msgRes = await fetch("/api/contact?unreadOnly=true", {
+        const msgRes = await fetch(`${API_ENDPOINTS.CONTACT}?unreadOnly=true`, {
+          credentials: "include",
           cache: "no-store",
         });
         if (msgRes.ok) {
@@ -332,7 +334,26 @@ export default function AdminDashboard() {
             </p>
           </Link>
 
-          {/* 7. ประวัติการแก้ไข */}
+          {/* 7. จัดการ Header & Footer */}
+          <Link
+            href="/admin/header-footer"
+            className="group bg-white rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 p-6 border-2 border-teal-100 hover:border-teal-300 transform hover:-translate-y-1"
+          >
+            <div className="flex items-center gap-4 mb-4">
+              <div className="bg-gradient-to-br from-teal-500 to-teal-600 p-4 rounded-xl text-white text-3xl group-hover:scale-110 transition-transform">
+                📋
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Header & Footer</h2>
+                <p className="text-sm text-gray-600">Header & Footer Settings</p>
+              </div>
+            </div>
+            <p className="text-gray-700 text-sm">
+              แก้ไขเนื้อหาโลโก้ อีเมล และข้อมูลใน Header และ Footer
+            </p>
+          </Link>
+
+          {/* 8. ประวัติการแก้ไข */}
           <Link
             href="/admin/edit-history"
             className="group bg-white rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 p-6 border-2 border-gray-100 hover:border-gray-300 transform hover:-translate-y-1"
